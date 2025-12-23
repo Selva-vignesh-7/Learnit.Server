@@ -428,6 +428,37 @@ namespace Learnit.Server.Controllers
         {
             var userId = GetUserId();
 
+            // Check if this is a non-YouTube external course
+            var isNonYouTubeExternal = dto.ExternalLinks != null && dto.ExternalLinks.Any() &&
+                !dto.ExternalLinks.Any(l => 
+                    l.Platform.Contains("YouTube", StringComparison.OrdinalIgnoreCase) ||
+                    l.Url.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) ||
+                    l.Url.Contains("youtu.be", StringComparison.OrdinalIgnoreCase));
+
+            // Validate description for non-YouTube courses
+            if (isNonYouTubeExternal)
+            {
+                if (string.IsNullOrWhiteSpace(dto.Description) || dto.Description.Trim().Length < 10)
+                {
+                    return BadRequest(new { message = "Please provide a detailed description for the course (at least 10 characters)" });
+                }
+
+                // Validate that at least one module is provided
+                if (dto.Modules == null || dto.Modules.Count == 0)
+                {
+                    return BadRequest(new { message = "At least one module is required for non-YouTube courses" });
+                }
+
+                // Validate that modules have titles
+                foreach (var module in dto.Modules)
+                {
+                    if (string.IsNullOrWhiteSpace(module.Title))
+                    {
+                        return BadRequest(new { message = "All modules must have a title" });
+                    }
+                }
+            }
+
             var course = new Course
             {
                 UserId = userId,
@@ -470,27 +501,32 @@ namespace Learnit.Server.Controllers
 
             await _db.SaveChangesAsync();
 
-            foreach (var pair in createdModules)
+            // Only create sub-modules for YouTube courses (non-YouTube courses don't support test modules)
+            if (!isNonYouTubeExternal)
             {
-                var module = pair.Module;
-                var subs = pair.Dto.SubModules ?? new List<CreateCourseSubModuleDto>();
-                for (int i = 0; i < subs.Count; i++)
+                foreach (var pair in createdModules)
                 {
-                    var sm = subs[i];
-                    _db.CourseSubModules.Add(new CourseSubModule
+                    var module = pair.Module;
+                    var subs = pair.Dto.SubModules ?? new List<CreateCourseSubModuleDto>();
+                    for (int i = 0; i < subs.Count; i++)
                     {
-                        CourseModuleId = module.Id,
-                        Title = sm.Title,
-                        Description = sm.Description,
-                        EstimatedHours = sm.EstimatedHours,
-                        Order = i,
-                        Notes = sm.Notes,
-                        IsCompleted = sm.IsCompleted
-                    });
+                        var sm = subs[i];
+                        _db.CourseSubModules.Add(new CourseSubModule
+                        {
+                            CourseModuleId = module.Id,
+                            Title = sm.Title,
+                            Description = sm.Description,
+                            EstimatedHours = sm.EstimatedHours,
+                            Order = i,
+                            Notes = sm.Notes,
+                            IsCompleted = sm.IsCompleted
+                        });
+                    }
                 }
+
+                await _db.SaveChangesAsync();
             }
 
-            await _db.SaveChangesAsync();
 
             // Add external links
             foreach (var linkDto in dto.ExternalLinks)
